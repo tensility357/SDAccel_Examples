@@ -66,7 +66,7 @@ Kernel Description (Bad Example) :
         1. Output Filters  = 256 (Size = 27 x 27) 
         2. Work Groups     = 1
         3. Work Items      = 1     ( One per each Work_Group )
-	
+    
         -----------------------------------------------------
         | Parameter     | Value |   Description             |
         -----------------------------------------------------
@@ -107,7 +107,7 @@ Kernel Description (Bad Example) :
 
 extern "C"
 {
-    void cnn(
+    void cnn_BAD(
             int *image,     // Read-Only Image 
             int *weights,   // Read-Only Weight Matrix
             int *out,       // Output Filters/Images
@@ -135,21 +135,21 @@ extern "C"
 
         // Burst Read Image
         readImg: for(int i = 0; i < i_chan * ISize * ISize; i++){
-        #pragma HLS LOOP_TRIPCOUNT min=96*27*27 max=96*27*27
-        #pragma HLS PIPELINE
+        #pragma HLS LOOP_TRIPCOUNT min=c_ichan*c_isize*c_isize max=c_ichan*c_isize*c_isize
+        #pragma HLS PIPELINE II=1
             img_lcl[i] = image[i];
         }
 
         // Burst Read Weights
         readWt: for(int i = 0; i < o_chan * WInChan * WSize * WSize; i++) {
-        #pragma HLS LOOP_TRIPCOUNT min=256*96*5*5 max=256*96*5*5
-        #pragma HLS PIPELINE
+        #pragma HLS LOOP_TRIPCOUNT min=c_ochan*c_ichan*c_wsize*c_wsize max=c_ochan*c_ichan*c_wsize*c_wsize
+        #pragma HLS PIPELINE II=1
             wgt_lcl[i] = weights[i];
         }
 
         // Runs over output filters
         outputLoop: for(int output = 0, count = 0; output < o_chan; output++) {
-        #pragma HLS LOOP_TRIPCOUNT min=256 max=256
+        #pragma HLS LOOP_TRIPCOUNT min=c_ochan max=c_ochan
             // Runs over Y-Axis of output filter
             outYAxis: for(int y = 0; y < OSize; y++) {
                 // Runs over X-Axis of output filter
@@ -157,17 +157,17 @@ extern "C"
                     short acc = 0;
                     // Runs over input channel
                     convInchan: for(int input = 0; input < i_chan; input++) {
-                    #pragma HLS LOOP_TRIPCOUNT min=96 max=96
+                    #pragma HLS LOOP_TRIPCOUNT min=c_ichan max=c_ichan
                         // Runs over filter window in Y-direction
                         convILoop: for(int i = 0; i < WSize; i++) {
                             // Runs over filter windows in X-direction
                             convJLoop: for(int j = 0; j < WSize; j++) {
-                            #pragma HLS PIPELINE
+                            #pragma HLS PIPELINE II=1
                                 // Calculates padding boundaries in X & Y direction
                                 int xVal = x*Stride + j-Padding, yVal = y*Stride + i-Padding;
                                 
                                 if(yVal >= 0 && yVal < ISize && xVal >= 0 && xVal < ISize) {
-                                    acc +=	(short) img_lcl[(input*ISize + yVal)*ISize + xVal] * 
+                                    acc +=    (short) img_lcl[(input*ISize + yVal)*ISize + xVal] * 
                                             (short) wgt_lcl[((output*i_chan + input)*WSize + i)*WSize + j];
                                 }
                             }
@@ -182,8 +182,8 @@ extern "C"
        
         // Burst write output
         writeOut: for(int i = 0; i < o_chan * OSize * OSize; i++) {
-        #pragma HLS LOOP_TRIPCOUNT min=256*27*27 max=256*27*27
-        #pragma HLS PIPELINE
+        #pragma HLS LOOP_TRIPCOUNT min=c_ichan*c_osize*c_osize max=c_ochan*c_osize*c_osize
+        #pragma HLS PIPELINE II=1
             out[i] = out_lcl[i];
         }
 

@@ -30,21 +30,24 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Maximum Matrix Dimension Supported by Kernel
 #define MAX_DIM 16
 
+//TRIPCOUNT identifier
+const unsigned int c_dim = MAX_DIM;
+
 extern "C" {
 // Computes matrix multiply
 // C = AxB, where A, B and C are square matrices of dimension (dimxdim)
 void matmul_naive(
             const int *in1,  // Read-Only Matrix 1
             const int *in2,  // Read-Only Matrix 2
-            int *out,        // Output Result
+            int *out_r,        // Output Result
             int dim)         // Matrix Dimension (assuming square matrix)
 {               
 #pragma HLS INTERFACE m_axi port=in1  offset=slave bundle=gmem
 #pragma HLS INTERFACE m_axi port=in2  offset=slave bundle=gmem
-#pragma HLS INTERFACE m_axi port=out offset=slave bundle=gmem
+#pragma HLS INTERFACE m_axi port=out_r offset=slave bundle=gmem
 #pragma HLS INTERFACE s_axilite port=in1  bundle=control
 #pragma HLS INTERFACE s_axilite port=in2  bundle=control
-#pragma HLS INTERFACE s_axilite port=out bundle=control
+#pragma HLS INTERFACE s_axilite port=out_r bundle=control
 #pragma HLS INTERFACE s_axilite port=dim bundle=control
 #pragma HLS INTERFACE s_axilite port=return bundle=control
 
@@ -56,28 +59,30 @@ void matmul_naive(
     // Burst read for matrix A
     readA:
     for (int i = 0 ; i < dim * dim; i++) {
-    #pragma HLS PIPELINE
+    #pragma HLS LOOP_TRIPCOUNT min=c_dim*c_dim max=c_dim*c_dim
+    #pragma HLS PIPELINE II=1
         A[i]  = in1[i];
     }
 
     // Burst read for matrix B
     readB:
     for (int i = 0 ; i < dim * dim; i++) {
-    #pragma HLS PIPELINE
+    #pragma HLS LOOP_TRIPCOUNT min=c_dim*c_dim max=c_dim*c_dim
+    #pragma HLS PIPELINE II=1
         B[i]  = in2[i];
     }
 
     lreorder1:
     for (int i = 0; i < dim; i++) {
-    #pragma HLS LOOP_TRIPCOUNT min=16 max=16
+    #pragma HLS LOOP_TRIPCOUNT min=c_dim max=c_dim
         lreorder2 :
         for (int j = 0; j < MAX_DIM; j++) {
-        #pragma HLS LOOP_TRIPCOUNT min=16 max=16
+        #pragma HLS LOOP_TRIPCOUNT min=c_dim max=c_dim
             int result = 0;
             lreorder3:
             for (int k = 0; k < dim; k++) {
-            #pragma HLS PIPELINE
-            #pragma HLS LOOP_TRIPCOUNT min=16 max=16
+            #pragma HLS PIPELINE II=1
+            #pragma HLS LOOP_TRIPCOUNT min=c_dim max=c_dim
                 result += A[i * dim +  k] * B[k * dim + j];
             }
             C[i*dim + j] = result;
@@ -87,9 +92,9 @@ void matmul_naive(
     // Burst write from matrix C
     writeC:
     for (int i = 0; i < dim * dim; i++) {
-    #pragma HLS PIPELINE
-    #pragma HLS LOOP_TRIPCOUNT min=256 max=256
-        out[i] = C[i];
+    #pragma HLS PIPELINE II=1
+    #pragma HLS LOOP_TRIPCOUNT min=c_dim*c_dim max=c_dim*c_dim
+        out_r[i] = C[i];
     }
 }
 }

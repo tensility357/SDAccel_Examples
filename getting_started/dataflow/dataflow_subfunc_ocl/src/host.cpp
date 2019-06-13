@@ -35,7 +35,16 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 int main(int argc, char** argv)
 {
+    if (argc != 2) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    std::string binaryFile = argv[1];
+
     //Allocate Memory in Host Memory
+    cl_int err;
+    unsigned fileBufSize;
     size_t vector_size_bytes = sizeof(int) * DATA_SIZE;
     std::vector<int,aligned_allocator<int>> source_input     (DATA_SIZE);
     std::vector<int,aligned_allocator<int>> source_hw_results(DATA_SIZE);
@@ -52,44 +61,41 @@ int main(int argc, char** argv)
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
 
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE);
-    std::string device_name = device.getInfo<CL_DEVICE_NAME>(); 
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE, &err));
+    OCL_CHECK(err, std::string device_name = device.getInfo<CL_DEVICE_NAME>(&err));
 
     //Create Program and Kernel
-    std::string binaryFile = xcl::find_binary_file(device_name,"adder");
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
     devices.resize(1);
-    cl::Program program(context, devices, bins);
-    cl::Kernel krnl_adder(program,"adder");
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    OCL_CHECK(err, cl::Kernel krnl_adder(program,"adder", &err));
 
     //Allocate Buffer in Global Memory
-    std::vector<cl::Memory> inBufVec, outBufVec;
-    cl::Buffer buffer_input (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, 
-            vector_size_bytes,source_input.data());
-    cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
-            vector_size_bytes,source_hw_results.data());
-    inBufVec.push_back(buffer_input);
-    outBufVec.push_back(buffer_output);
-
-    //Copy input data to device global memory
-    q.enqueueMigrateMemObjects(inBufVec,0/* 0 means from host*/);
+    OCL_CHECK(err, cl::Buffer buffer_input (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
+            vector_size_bytes,source_input.data(), &err));
+    OCL_CHECK(err, cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
+            vector_size_bytes,source_hw_results.data(), &err));
 
     int inc = INCR_VALUE;
     int size = DATA_SIZE;
 
     //Set the Kernel Arguments
     int narg=0;
-    krnl_adder.setArg(narg++,buffer_input);
-    krnl_adder.setArg(narg++,buffer_output);
-    krnl_adder.setArg(narg++,inc);
-    krnl_adder.setArg(narg++,size);
+    OCL_CHECK(err, err = krnl_adder.setArg(narg++,buffer_input));
+    OCL_CHECK(err, err = krnl_adder.setArg(narg++,buffer_output));
+    OCL_CHECK(err, err = krnl_adder.setArg(narg++,inc));
+    OCL_CHECK(err, err = krnl_adder.setArg(narg++,size));
+
+    //Copy input data to device global memory
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_input},0/* 0 means from host*/));
 
     //Launch the Kernel
-    q.enqueueTask(krnl_adder);
+    OCL_CHECK(err, err = q.enqueueTask(krnl_adder));
 
     //Copy Result from Device Global Memory to Host Local Memory
-    q.enqueueMigrateMemObjects(outBufVec,CL_MIGRATE_MEM_OBJECT_HOST);
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_output},CL_MIGRATE_MEM_OBJECT_HOST));
     q.finish();
 
 //OPENCL HOST CODE AREA END
@@ -105,6 +111,8 @@ int main(int argc, char** argv)
             break;
         }
     }
+
+    delete[] fileBuf;
 
     std::cout << "TEST " << (match ? "PASSED" : "FAILED") << std::endl; 
     return (match ? EXIT_SUCCESS :  EXIT_FAILURE);

@@ -70,13 +70,18 @@ Description:
 #include <hls_stream.h>
 #include <ap_int.h>
 
+#define DATA_SIZE 4096
+
+//TRIPCOUNT identifier
+const int c_size = DATA_SIZE;
+
 // Read Data from Global Memory and write into Stream inStream
 static void read_input(unsigned int *in, hls::stream<unsigned int> &inStream,
         int size)
 {
     mem_rd: for (int i = 0 ; i < size ; i++){
-#pragma HLS pipeline
-#pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+    #pragma HLS PIPELINE II=1
+    #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
         //Blocking write command to inStream 
         inStream << in[i];
     }
@@ -87,8 +92,8 @@ static void compute_add(hls::stream<unsigned int> &inStream ,
         hls::stream<unsigned int> &outStream, int inc, int size)
 {
     execute: for (int i = 0 ; i < size ; i++){
-#pragma HLS pipeline
-#pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+    #pragma HLS PIPELINE II=1
+    #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
         //Blocking read command from inStream and Blocking write command 
         //to outStream 
         outStream << (inStream.read() + inc);
@@ -100,8 +105,8 @@ static void write_result(unsigned int *out, hls::stream<unsigned int>
         &outStream , int size)
 {
     mem_wr: for (int i = 0 ; i < size ; i++){
-#pragma HLS pipeline
-#pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+    #pragma HLS PIPELINE II=1
+    #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
         //Blocking read command to inStream 
         out[i] = outStream.read();
     }
@@ -128,8 +133,8 @@ void adder(unsigned int *in, unsigned int *out, int inc, int size)
 
 //Adding names for the streams. It allows the name to be used in reporting. Vivado HLS
 //automatically checks to ensure all elements from an input stream are read during sw emulation.
-    hls::stream<unsigned int> inStream("input_stream");
-    hls::stream<unsigned int> outStream("output_stream");
+    static hls::stream<unsigned int> inStream("input_stream");
+    static hls::stream<unsigned int> outStream("output_stream");
 #pragma HLS STREAM variable=inStream  depth=32
 #pragma HLS STREAM variable=outStream depth=32
 //  HLS STREAM variable=<name> depth=<size> pragma is used to define the Stream 

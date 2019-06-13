@@ -40,13 +40,16 @@ int compareImages(int *in, int *out, size_t image_size);
 
 int main(int argc, char* argv[])
 {
-    if (argc != 2)
-    {
-        std::cout << "Usage: " << argv[0] << " <input bitmap>" << std::endl;
-        return EXIT_FAILURE ;
+    if (argc != 3) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << " <input bitmap>" << std::endl;
+        return EXIT_FAILURE;
     }
-    std::string bitmapFilename = argv[1];
- 
+
+    std::string binaryFile = argv[1];
+    std::string bitmapFilename = argv[2];
+
+    cl_int err;
+    unsigned fileBufSize;
     //Read the bit map file into memory
     BitmapInterface image(bitmapFilename.data());
     bool result = image.readBitmapFile() ;
@@ -71,39 +74,36 @@ int main(int argc, char* argv[])
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
 
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE);
-    std::string device_name = device.getInfo<CL_DEVICE_NAME>(); 
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE, &err));
+    OCL_CHECK(err, std::string device_name = device.getInfo<CL_DEVICE_NAME>(&err));
 
-    std::string binaryFile = xcl::find_binary_file(device_name,"rgb_to_hsv");
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
     devices.resize(1);
-    cl::Program program(context, devices, bins);
-    cl::Kernel kernel(program,"rgb_to_hsv");
-    
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    OCL_CHECK(err, cl::Kernel krnl_rgb2hsv(program,"rgb_to_hsv", &err));
+ 
     //Allocate Buffer in Global Memory
-    cl::Buffer buffer_rgbImage(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, 
-            image_size_bytes,hwRgbImage.data());
-    std::vector<cl::Memory> rgbBufVec;
-    rgbBufVec.push_back(buffer_rgbImage);
+    OCL_CHECK(err, cl::Buffer buffer_rgbImage(context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+            image_size_bytes,hwRgbImage.data(), &err));
 
-    cl::Buffer buffer_hsvImage(context, CL_MEM_WRITE_ONLY| CL_MEM_USE_HOST_PTR, 
-            image_size_bytes,hwHsvImage.data());
-    std::vector<cl::Memory> hsvBufVec;
-    hsvBufVec.push_back(buffer_hsvImage);
+    OCL_CHECK(err, cl::Buffer buffer_hsvImage(context, CL_MEM_WRITE_ONLY| CL_MEM_USE_HOST_PTR,
+            image_size_bytes,hwHsvImage.data(), &err));
+
+    OCL_CHECK(err, err = krnl_rgb2hsv.setArg(0, buffer_rgbImage));
+    OCL_CHECK(err, err = krnl_rgb2hsv.setArg(1, buffer_hsvImage));
+    OCL_CHECK(err, err = krnl_rgb2hsv.setArg(2, image_size));
 
     //Copy input RGB Image to device global memory
-    q.enqueueMigrateMemObjects(rgbBufVec,0/* 0 means from host*/);
-  
-    auto krnl_rgb2hsv = cl::KernelFunctor<cl::Buffer&, cl::Buffer& , int>(kernel);
-    
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_rgbImage},0/* 0 means from host*/));
+
     //Launch the Kernel
-    krnl_rgb2hsv(cl::EnqueueArgs(q,cl::NDRange(1,1,1), cl::NDRange(1,1,1)), 
-            buffer_rgbImage, buffer_hsvImage, image_size);
+    OCL_CHECK(err, err = q.enqueueTask(krnl_rgb2hsv));
 
     //Copy Result from Device Global Memory to Host Local Memory
-    q.enqueueMigrateMemObjects(hsvBufVec,CL_MIGRATE_MEM_OBJECT_HOST);
-    q.finish();
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_hsvImage},CL_MIGRATE_MEM_OBJECT_HOST));
+    OCL_CHECK(err, err = q.finish());
 
 //OPENCL HOST CODE AREA END
 
@@ -116,6 +116,8 @@ int main(int argc, char* argv[])
     //Converting Generated HSV to back to RGB and Writing RGB file to disk
     sw_HsvToRgb(hwHsvImage.data(), outRgbImage.data(), image.numPixels());
     image.writeBitmapFile(outRgbImage.data()) ;
+
+    delete[] fileBuf;
 
     std::cout << "TEST " << (match ? "FAILED" : "PASSED") << std::endl; 
     return (match ? EXIT_FAILURE :  EXIT_SUCCESS);

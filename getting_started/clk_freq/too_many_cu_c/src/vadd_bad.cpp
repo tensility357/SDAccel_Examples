@@ -67,6 +67,7 @@ Kernel Description (Bad Example) :
 
 // Work load of each Work_Item
 #define BUFFER_SIZE 5120
+#define DATA_SIZE 81920
 
 #define WORK_GROUP 8 
 #define WORK_ITEM_PER_GROUP 1
@@ -74,11 +75,14 @@ Kernel Description (Bad Example) :
 //Number of Compute Units (CU)
 #define NUM_CU 8
 
+//TRIPCOUNT identifier
+const int c_size = DATA_SIZE/(BUFFER_SIZE*NUM_CU);
+
 typedef unsigned int uint;
 
 extern "C"
 {
-    void vadd(
+    void vadd_BAD(
             const int *in1, // Read-Only Vector 1
             const int *in2, // Read-Only Vector 2
             int *out,       // Output Result
@@ -110,7 +114,7 @@ extern "C"
         int global_size = WORK_GROUP;
          // Computes vector addition operation iteratively over entire data set
         for(int offset = 0; offset < size; offset += BUFFER_SIZE*global_size){
-        #pragma HLS LOOP_TRIPCOUNT min=2 max=2
+        #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
             
             // Enables burst reads on input vectors from global memory
             // Each Work_Item asynchronously moves its work load from global memory
@@ -118,13 +122,13 @@ extern "C"
             
             // Burst read for in1_lcl
             readIn1: for(int j = 0 ; j < BUFFER_SIZE; j++){
-            #pragma HLS PIPELINE
+            #pragma HLS PIPELINE II=1
                 in1_lcl[j] = in1[global_id*BUFFER_SIZE + offset + j]; 
             }
             
             // Burst read for in2_lcl
             readIn2: for(int j = 0 ; j < BUFFER_SIZE; j++){
-            #pragma HLS PIPELINE
+            #pragma HLS PIPELINE II=1
                 in2_lcl[j] = in2[global_id*BUFFER_SIZE + offset + j]; 
             }
             
@@ -140,7 +144,7 @@ extern "C"
 
             // Pipeline Operations
             vadd: for(int i = 0; i < BUFFER_SIZE; i++){
-            #pragma HLS PIPELINE
+            #pragma HLS PIPELINE II=1
                 out_lcl[i] = in1_lcl[i] + in2_lcl[i];
             }
 
@@ -150,7 +154,7 @@ extern "C"
             
             // Burst write from out_lcl
             writeOut: for(int j = 0 ; j < BUFFER_SIZE; j++){
-            #pragma HLS PIPELINE
+            #pragma HLS PIPELINE II=1
                 out[global_id*BUFFER_SIZE + offset + j] = out_lcl[j];
             }
         }

@@ -33,8 +33,6 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *  all the DSAs. To make this example to work with multi DDR DSAs
 *  please follow steps mentioned below.
 *
-*  Note : "bandwidth" in map_connect options below is the kernel name defined in kernel.cl   
-*
 *  ***************************************************************************************
 *  DSA  (2DDR):
 *              
@@ -42,11 +40,10 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *                  > Miscellaneous > Other flags
 *  2.In "Other flags" box enter following
 *     a. --max_memory_ports all 
-*     b. --sp bandwidth_1.m_axi_gmem0:bank0
-*     c. --sp bandwidth_1.m_axi_gmem1:bank1 
 *  3.<SDx Project> > Properties > C/C++ Build > Settings > SDx XOCC Kernel Linker
 *                  > Miscellaneous > Other flags
-*  4.Repeat step 2 above
+*     a. --sp bandwidth_1.m_axi_gmem0:DDR[0]
+*     b. --sp bandwidth_1.m_axi_gmem1:DDR[1] 
 *
 * *****************************************************************************************
 *  DSA  (3DDR):
@@ -55,36 +52,36 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *                  > Miscellaneous > Other flags
 *  2.In "Other flags" box enter following
 *     a. --max_memory_ports all 
-*     b. --sp bandwidth_1.m_axi_gmem0:bank0
-*     c. --sp bandwidth_1.m_axi_gmem1:bank1 
-*     d. --sp bandwidth_1.m_axi_gmem2:bank2
 *  3.<SDx Project> > Properties > C/C++ Build > Settings > SDx XOCC Kernel Linker
 *                  > Miscellaneous > Other flags
-*  4.Repeat step 2 above
-*  5.Define NDDR_BANKS 3 in kernel "#define NDDR_BANKS 3" at the top of kernel.cl 
+*     a. --sp bandwidth_1.m_axi_gmem0:DDR[0]
+*     b. --sp bandwidth_1.m_axi_gmem1:DDR[1] 
+*     c. --sp bandwidth_1.m_axi_gmem2:DDR[2]
+*  4.Define NDDR_BANKS 3 in kernel "#define NDDR_BANKS 3" at the top of kernel.cl 
 * 
 * *****************************************************************************************
 *  DSA  (4DDR):
+*      
+*  Note: The selected platform must support 4DDR.             
 *              
 *  1.<SDx Project> > Properties > C/C++ Build > Settings > SDx XOCC Kernel Compiler 
 *                  > Miscellaneous > Other flags
 *  2.In "Other flags" box enter following
 *     a. --max_memory_ports all 
-*     b. --sp bandwidth_1.m_axi_gmem0:bank0
-*     c. --sp bandwidth_1.m_axi_gmem1:bank1 
-*     d. --sp bandwidth_1.m_axi_gmem2:bank2
-*     e. --sp bandwidth_1.m_axi_gmem3:bank3 
 *  3.<SDx Project> > Properties > C/C++ Build > Settings > SDx XOCC Kernel Linker
 *                  > Miscellaneous > Other flags
-*  4.Repeat step 2 above
-*  5.Define NDDR_BANKS 4 in kernel "#define NDDR_BANKS 4" at the top of kernel.cl 
+*     a. --sp bandwidth_1.m_axi_gmem0:DDR[0]
+*     b. --sp bandwidth_1.m_axi_gmem1:DDR[1] 
+*     c. --sp bandwidth_1.m_axi_gmem2:DDR[2]
+*     d. --sp bandwidth_1.m_axi_gmem3:DDR[3] 
+*  4.Define NDDR_BANKS 4 in kernel "#define NDDR_BANKS 4" at the top of kernel.cl 
 * 
 * *****************************************************************************************
 *
 *  CLI Flow:
 *
-*  In CLI flow makefile detects the DDR of a device and based on that
-*  automatically it adds all the flags that are necessary. This example can be
+*  In CLI flow makefile detects the DDR of a device on the basis of ddr_banks variable
+*  and based on that automatically it adds all the flags that are necessary. This example can be
 *  used similar to other examples in CLI flow, extra setup is not needed.
 *
 *********************************************************************************************/
@@ -96,27 +93,34 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include "xcl2.hpp"
 
+#ifndef NDDR_BANKS
+#define NDDR_BANKS 1
+#endif
+
 int main(int argc, char** argv) {
 
-    if(argc != 1) {
-        printf("Usage: %s\n", argv[0]);
-        return EXIT_FAILURE;
-    }
+    if (argc != 2) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
+		return EXIT_FAILURE;
+	}
 
+    std::string binaryFile = argv[1];
+
+    cl_int err;
+    unsigned fileBufSize;
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
 
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE);
-    std::string device_name = device.getInfo<CL_DEVICE_NAME>();
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE, &err));
+    OCL_CHECK(err, std::string device_name = device.getInfo<CL_DEVICE_NAME>(&err));
     std::cout << "Found Device=" << device_name.c_str() << std::endl;
 
-    std::string binaryFile = xcl::find_binary_file(device_name, "krnl_kernel_global");
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
     devices.resize(1);
-    cl::Program program(context, devices, bins);
-
-    int err;
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    OCL_CHECK(err, cl::Kernel krnl_global_bandwidth(program, "bandwidth", &err));
 
     size_t globalbuffersize = 1024*1024*1024;    /* 1GB */
 
@@ -150,49 +154,53 @@ int main(int argc, char** argv) {
      * buffer[3] is output1 */
     cl::Buffer *buffer[num_buffers];
 
-    cl_mem_ext_ptr_t ext_buffer[num_buffers];
-
     #if NDDR_BANKS > 1
-        unsigned xcl_bank[4] = {
-            XCL_MEM_DDR_BANK0,
-            XCL_MEM_DDR_BANK1,
-            XCL_MEM_DDR_BANK2,
-            XCL_MEM_DDR_BANK3
-        };
 
         for (int i = 0; i < ddr_banks; i++) {
-            ext_buffer[i].flags = xcl_bank[i];
-            ext_buffer[i].obj = NULL;
-            ext_buffer[i].param = 0;
-
-	        buffer[i] = new cl::Buffer(context, 
-		                           CL_MEM_READ_WRITE | CL_MEM_EXT_PTR_XILINX, 
-                    			   globalbuffersize, 
-            		    		   &ext_buffer[i], 
-			                	   &err);
+            buffer[i] = new cl::Buffer(context,
+                                   CL_MEM_READ_WRITE, 
+                                   globalbuffersize, 
+                                   NULL, 
+                                   &err);
             if(err != CL_SUCCESS) {
                 printf("Error: Failed to allocate buffer in DDR bank %zu\n", globalbuffersize);
                 return EXIT_FAILURE;
             }
         } /* End for (i < ddr_banks) */
     #else
-	     buffer[0] = new cl::Buffer(context, 
-         				            CL_MEM_READ_WRITE, 
-                    				globalbuffersize, 
-        			            	NULL, 
-                    				&err);
-    	 buffer[1] = new cl::Buffer(context, 
-        			            	CL_MEM_READ_WRITE, 
-                    				globalbuffersize, 
-        			            	NULL, 
-                    				&err);  
-         if(err != CL_SUCCESS) {
-            printf("Error: Failed to allocate input/output_buffer0 in BANK0 of size %zu\n", globalbuffersize);
-            return EXIT_FAILURE;
-         }
+         OCL_CHECK(err, buffer[0] = new cl::Buffer(context,
+                                     CL_MEM_READ_WRITE, 
+                                    globalbuffersize, 
+                                    NULL, 
+                                    &err));
+         OCL_CHECK(err, buffer[1] = new cl::Buffer(context,
+                                    CL_MEM_READ_WRITE, 
+                                    globalbuffersize, 
+                                    NULL, 
+                                    &err));
     #endif
 
+    /* 
+     * Using setArg(), i.e. setting kernel arguments, explicitly before copying host 
+     * memory to device memory allowing runtime to associate buffer with correct
+     * DDR banks automatically. 
+    */
+
+    /* Set the kernel arguments */
+    int arg_index = 0;
+    int buffer_index = 0;
     cl_ulong num_blocks = globalbuffersize/64;
+
+    OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++])));
+    OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++])));
+    #if NDDR_BANKS == 3        
+       OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++])));
+    #elif NDDR_BANKS > 3
+       OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++])));
+       OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++])));
+    #endif
+    OCL_CHECK(err, err = krnl_global_bandwidth.setArg(arg_index++, num_blocks));
+
     double dbytes = globalbuffersize;
     double dmbytes = dbytes / (((double)1024) * ((double)1024));
     printf("Starting kernel to read/write %.0lf MB bytes from/to global memory... \n", dmbytes);
@@ -200,105 +208,70 @@ int main(int argc, char** argv) {
     /* Write input buffer */
     /* Map input buffer for PCIe write */
     unsigned char *map_input_buffer0;
-    map_input_buffer0 = (unsigned char *) q.enqueueMapBuffer(*(buffer[0]), 
-							                                 CL_FALSE, 
-                            							     CL_MAP_WRITE_INVALIDATE_REGION, 
-                            							     0, 
-                               							     globalbuffersize, 
-                            							     NULL, 
-							                                 NULL, 
-                            							     &err);
-    if (err != CL_SUCCESS) {
-            printf("Error: Failed to enqueueMapBuffer0 OpenCL buffer\n");
-            printf("Error: Test failed\n");
-            return EXIT_FAILURE;
-    }
-    q.finish();
+    OCL_CHECK(err, map_input_buffer0 = (unsigned char *) q.enqueueMapBuffer(*(buffer[0]),
+                                                             CL_FALSE, 
+                                                             CL_MAP_WRITE_INVALIDATE_REGION, 
+                                                             0, 
+                                                                globalbuffersize, 
+                                                             NULL, 
+                                                             NULL, 
+                                                             &err));
+    OCL_CHECK(err, err = q.finish());
 
     /* prepare data to be written to the device */
     for(size_t i = 0; i<globalbuffersize; i++) {
         map_input_buffer0[i] = input_host[i];
     }
-    err = q.enqueueUnmapMemObject(*(buffer[0]), 
-                				  map_input_buffer0);
-    if (err != CL_SUCCESS) {
-        printf("Error: Failed to copy input dataset to OpenCL buffer\n");
-        printf("Error: Test failed\n");
-        return EXIT_FAILURE;
-    }
-    q.finish();
+    OCL_CHECK(err, err = q.enqueueUnmapMemObject(*(buffer[0]),
+                                  map_input_buffer0));
+
+    OCL_CHECK(err, err = q.finish());
 
     #if NDDR_BANKS > 3
         unsigned char *map_input_buffer1;
-     	map_input_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[2]), 
-	                                							 CL_FALSE, 
-                                								 CL_MAP_WRITE_INVALIDATE_REGION, 
-                                    							 0, 
-                                								 globalbuffersize, 
-                                								 NULL, 
-                                								 NULL, 
-                                								 &err);
-        if (err != CL_SUCCESS) {
-            printf("Error: Failed to enqueueMapBuffer1 OpenCL buffer\n");
-            printf("Error: Test failed\n");
-            return EXIT_FAILURE;
-        }
-    	q.finish();
+         OCL_CHECK(err, map_input_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[2]),
+                                                                 CL_FALSE, 
+                                                                 CL_MAP_WRITE_INVALIDATE_REGION, 
+                                                                 0, 
+                                                                 globalbuffersize, 
+                                                                 NULL, 
+                                                                 NULL, 
+                                                                 &err));
+        OCL_CHECK(err, err = q.finish());
 
         /* Prepare data to be written to the device */
         for(size_t i = 0; i < globalbuffersize; i++) {
             map_input_buffer1[i] = input_host[i];
         }
 
-	    err = q.enqueueUnmapMemObject(*(buffer[2]), 
-		                		      map_input_buffer1);
-        if (err != CL_SUCCESS) {
-            printf("Error: Failed to copy input dataset to OpenCL buffer\n");
-            printf("Error: Test failed\n");
-            return EXIT_FAILURE;
-        }
-        q.finish();
+        OCL_CHECK(err, err = q.enqueueUnmapMemObject(*(buffer[2]),
+                                      map_input_buffer1));
+        OCL_CHECK(err, err = q.finish());
     #endif
 
-    /* Set the kernel arguments */
-    cl::Kernel krnl_global_bandwidth(program, "bandwidth");
-    int arg_index = 0;
-    int buffer_index = 0;
-
-    krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++]));
-    krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++]));
-    #if NDDR_BANKS == 3        
-       krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++]));
-    #elif NDDR_BANKS > 3
-       krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++]));
-       krnl_global_bandwidth.setArg(arg_index++, *(buffer[buffer_index++]));
-    #endif
-    krnl_global_bandwidth.setArg(arg_index++, num_blocks);
-
-    unsigned long nsduration;
+    unsigned long start, end, nsduration;
     cl::Event event;
 
     /* Execute Kernel */
-    q.enqueueTask(krnl_global_bandwidth, NULL, &event);
-    event.wait();
-    nsduration = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() - event.getProfilingInfo<CL_PROFILING_COMMAND_START>(); 
+    OCL_CHECK(err, err = q.enqueueTask(krnl_global_bandwidth, NULL, &event));
+    OCL_CHECK(err, err = event.wait());
+    end = OCL_CHECK(err, event.getProfilingInfo<CL_PROFILING_COMMAND_END>(&err));
+    start = OCL_CHECK(err, event.getProfilingInfo<CL_PROFILING_COMMAND_START>(&err));
+    nsduration = end - start;
 
     /* Copy results back from OpenCL buffer */
     unsigned char *map_output_buffer0;
-    map_output_buffer0 = (unsigned char *) q.enqueueMapBuffer(*(buffer[1]), 
-                            							      CL_FALSE, 
-                            							      CL_MAP_READ, 
-                            							      0, 
-                            							      globalbuffersize, 
-                            							      NULL, 
-                            							      NULL, 
-                            							      &err);
-    if (err != CL_SUCCESS) {
-        printf("ERROR: Failed to read output size buffer %d\n", err);
-        printf("ERROR: Test failed\n");
-        return EXIT_FAILURE;
-    }
-    q.finish();
+    OCL_CHECK(err, map_output_buffer0 = (unsigned char *) q.enqueueMapBuffer(*(buffer[1]),
+                                                              CL_FALSE, 
+                                                              CL_MAP_READ, 
+                                                              0, 
+                                                              globalbuffersize, 
+                                                              NULL, 
+                                                              NULL, 
+                                                              &err));
+    OCL_CHECK(err, err = q.finish());
+
+    std::cout << "Kernel Duration..." << nsduration << " ns" <<std::endl;
 
     /* Check the results of output0 */
     for (size_t i = 0; i < globalbuffersize; i++) {
@@ -309,20 +282,15 @@ int main(int argc, char** argv) {
     }
     #if NDDR_BANKS == 3
         unsigned char *map_output_buffer1;
-  	    map_output_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[2]), 
-								                                  CL_FALSE, 
-                                                				  CL_MAP_READ, 
-                                								  0, 
-                                								  globalbuffersize, 
-                                								  NULL, 
-                                								  NULL, 
-                                								  &err);
-        if (err != CL_SUCCESS) {
-            printf("ERROR: Failed to read output size buffer %d\n", err);
-            printf("ERROR: Test failed\n");
-            return EXIT_FAILURE;
-        }
-        q.finish();
+          OCL_CHECK(err, map_output_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[2]),
+                                                                  CL_FALSE, 
+                                                                  CL_MAP_READ, 
+                                                                  0, 
+                                                                  globalbuffersize, 
+                                                                  NULL, 
+                                                                  NULL, 
+                                                                  &err));
+        OCL_CHECK(err, err = q.finish());
 
         /* Check the results of output1 */
         for (size_t i = 0; i < globalbuffersize; i++) {
@@ -335,20 +303,15 @@ int main(int argc, char** argv) {
 
     #if NDDR_BANKS > 3
         unsigned char *map_output_buffer1;
-  	    map_output_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[3]), 
-                                								  CL_FALSE, 
-                                								  CL_MAP_READ, 
-                                								  0, 
-                                								  globalbuffersize, 
-                                								  NULL, 
-                                								  NULL, 
-                                								  &err);
-        if (err != CL_SUCCESS) {
-            printf("ERROR: Failed to read output size buffer %d\n", err);
-            printf("ERROR: Test failed\n");
-            return EXIT_FAILURE;
-        }
-        q.finish();
+          OCL_CHECK(err, map_output_buffer1 = (unsigned char *) q.enqueueMapBuffer(*(buffer[3]),
+                                                                  CL_FALSE, 
+                                                                  CL_MAP_READ, 
+                                                                  0, 
+                                                                  globalbuffersize, 
+                                                                  NULL, 
+                                                                  NULL, 
+                                                                  &err));
+        OCL_CHECK(err, err = q.finish());
 
         /* Check the results of output1 */
         for (size_t i = 0; i < globalbuffersize; i++) {
@@ -362,12 +325,14 @@ int main(int argc, char** argv) {
     #if NDDR_BANKS > 1
     for(int i = 0; i < ddr_banks; i++)
      {
-	delete(buffer[i]);
+    delete(buffer[i]);
      }
     #else
-	delete(buffer[0]);
-	delete(buffer[1]);
+    delete(buffer[0]);
+    delete(buffer[1]);
     #endif
+
+    delete[] fileBuf;
 
     /* Profiling information */
     double dnsduration = ((double)nsduration);

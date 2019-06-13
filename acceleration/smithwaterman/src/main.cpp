@@ -37,7 +37,6 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 using namespace std;
 using namespace sda;
-using namespace sda::cl;
 using namespace sda::utils;
 
 #include "sw.h"
@@ -75,6 +74,13 @@ void intelImpl(int nBlocks, int blkSz, int nThreads, int writeMatchArray, MatchA
 //pass cmd line options to select opencl device
 int main(int argc, char* argv[])
 {
+    if (argc != 2) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
+		return EXIT_FAILURE;
+    }
+
+    std::string binaryFile = argv[1];
+
     LogInfo("\nXilinx Smith Waterman benchmark started");
     string strKernelFullPath = sda::GetApplicationPath() + "/";
 
@@ -135,13 +141,13 @@ int main(int argc, char* argv[])
 
     const std::unique_ptr<MatchArray> pMatchInfo(new MatchArray(totalSz, MAXROW, MAXCOL, &publisher));
 #else
-	const std::unique_ptr<MatchArray> pMatchInfo(new MatchArray(totalSz, MAXROW, MAXCOL));
+    const std::unique_ptr<MatchArray> pMatchInfo(new MatchArray(totalSz, MAXROW, MAXCOL));
 #endif
 
     //SWAN Execution 
     if (strPlatformName == string("intel")) {
         for (int r = 0; r < nRuns; r++) {
-            //SWAN-CPU Intel Intrinsic flow	
+            //SWAN-CPU Intel Intrinsic flow    
             intelImpl(nBlocks, blkSz, nThreads, writeMatchArray, pMatchInfo.get());
         }
     } else {
@@ -156,7 +162,7 @@ int main(int argc, char* argv[])
         }
 
         SmithWatermanApp smithwaterman(strPlatformName, strDeviceName, idxSelectedDevice,
-            strKernelFullPath, strSampleFP, nBlocks, blkSz,
+            strKernelFullPath, strSampleFP, binaryFile, nBlocks, blkSz,
             doubleBuffered == 0 ? false : true,
             verifyMode == 0 ? false : true,
             writeMatchArray == 0 ? false : true,

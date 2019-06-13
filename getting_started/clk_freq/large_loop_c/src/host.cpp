@@ -98,6 +98,7 @@ uint64_t run_opencl_cnn(
     cl::CommandQueue &q,
     cl::Context &context,
     std::string &device_name,
+    std::string &binaryFile,
     bool good,
     int size,
     std::vector<int, aligned_allocator<int>> &weight,
@@ -106,23 +107,22 @@ uint64_t run_opencl_cnn(
     int i_chan,
     int o_chan
 ) {
-    std::string binaryFile;
+    
+    cl_int err;
+    unsigned fileBufSize;
+
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
+    devices.resize(1);
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    cl::Kernel krnl_cnn_conv;
 
     if (good) {
-        binaryFile = xcl::find_binary_file(device_name, "cnn_GOOD");
-    } 
-    else {
-        binaryFile = xcl::find_binary_file(device_name,"cnn_BAD");
-        if(access(binaryFile.c_str(), R_OK) != 0) {
-            std::cout << "WARNING: vadd_BAD xclbin not built" << std::endl;
-            return false;
-        }
+    OCL_CHECK(err, krnl_cnn_conv = cl::Kernel(program,"cnn_GOOD", &err));
     }
-
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
-    devices.resize(1);
-    cl::Program program(context, devices, bins);
-    cl::Kernel krnl_cnn_conv(program,"cnn");
+    else {
+    OCL_CHECK(err, krnl_cnn_conv = cl::Kernel(program, "cnn_BAD", &err));
+    }
 
     std::cout << "Starting " << (good ? "GOOD" : "BAD") << " Kernel" << std::endl;
 
@@ -131,28 +131,23 @@ uint64_t run_opencl_cnn(
     size_t output_size_bytes = sizeof(int) * o_chan * OSize * OSize;
 
     // Allocate Buffer in Global Memory
-    std::vector<cl::Memory> inBufVec, outBufVec;
-    cl::Buffer buffer_image (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
-                            image_size_bytes, image.data());
-    cl::Buffer buffer_weight(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
-                            weight_size_bytes, weight.data());
-    cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
-                                output_size_bytes, output.data());
-
-    inBufVec.push_back(buffer_image);
-    inBufVec.push_back(buffer_weight);
-    outBufVec.push_back(buffer_output);
-
-    q.enqueueMigrateMemObjects(inBufVec,0/* 0 means from host*/);
+    OCL_CHECK(err, cl::Buffer buffer_image (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
+                            image_size_bytes, image.data(), &err));
+    OCL_CHECK(err, cl::Buffer buffer_weight(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
+                            weight_size_bytes, weight.data(), &err));
+    OCL_CHECK(err, cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
+                                output_size_bytes, output.data(), &err));
 
     //Set the Kernel Arguments
     int narg = 0;
-    krnl_cnn_conv.setArg(narg++, buffer_image);
-    krnl_cnn_conv.setArg(narg++, buffer_weight);
-    krnl_cnn_conv.setArg(narg++, buffer_output);
-    krnl_cnn_conv.setArg(narg++, size);
-    krnl_cnn_conv.setArg(narg++, i_chan);
-    krnl_cnn_conv.setArg(narg++, o_chan);
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, buffer_image));
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, buffer_weight));
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, buffer_output));
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, size));
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, i_chan));
+    OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg++, o_chan));
+
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_image, buffer_weight},0/* 0 means from host*/));
 
     std::cout << "Begin " << (good ? "GOOD" : "BAD") << " Kernel" << std::endl;
 
@@ -165,12 +160,12 @@ uint64_t run_opencl_cnn(
 
         auto kernel_start = std::chrono::high_resolution_clock::now(); 
         for(int i = 0; i < work_group; i++) {
-            krnl_cnn_conv.setArg(narg+0, i);
-            krnl_cnn_conv.setArg(narg+1, work_group);
+            OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg+0, i));
+            OCL_CHECK(err, err = krnl_cnn_conv.setArg(narg+1, work_group));
 
-            q.enqueueTask(krnl_cnn_conv, NULL, &events[i]);
+            OCL_CHECK(err, err = q.enqueueTask(krnl_cnn_conv, NULL, &events[i]));
         }
-        q.finish();
+        OCL_CHECK(err, err = q.finish());
         auto kernel_end = std::chrono::high_resolution_clock::now();
         auto kernel_time = std::chrono::duration<uint64_t, std::nano>(kernel_end - kernel_start);
         duration =  kernel_time.count();
@@ -179,16 +174,17 @@ uint64_t run_opencl_cnn(
         cl::Event event;
 
         auto kernel_start = std::chrono::high_resolution_clock::now(); 
-        q.enqueueTask(krnl_cnn_conv, NULL, &event);
-        q.finish();
+        OCL_CHECK(err, err = q.enqueueTask(krnl_cnn_conv, NULL, &event));
+        OCL_CHECK(err, err = q.finish());
         auto kernel_end = std::chrono::high_resolution_clock::now();
         auto kernel_time = std::chrono::duration<uint64_t, std::nano>(kernel_end - kernel_start);
         duration =  kernel_time.count();
     }
 
     //Copy Result from Device Global Memory to Host Local Memory
-    q.enqueueMigrateMemObjects(outBufVec,CL_MIGRATE_MEM_OBJECT_HOST);
-    q.finish();
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_output},CL_MIGRATE_MEM_OBJECT_HOST));
+    OCL_CHECK(err, err = q.finish());
+    delete[] fileBuf;
 
     std::cout << "Finished " << (good ? "GOOD" : "BAD") << " Kernel" << std::endl;
     return duration;
@@ -196,11 +192,18 @@ uint64_t run_opencl_cnn(
 
 int main(int argc, char** argv)
 {
+    if (argc != 3) {
+        std::cout << "Usage: " << argv[0] << " <GOOD XCLBIN File>" 
+                    << " <BAD XCLBIN File>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     int i_chan = IChan;
     int o_chan = OChan;
 
     int size = DATA_SIZE;
-
+    cl_int err;
+    
     const char *xcl_emu = getenv("XCL_EMULATION_MODE");
     if(xcl_emu && !strcmp(xcl_emu, "hw_emu")) {
         i_chan = 1;
@@ -241,14 +244,19 @@ int main(int argc, char** argv)
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
     
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE | CL_QUEUE_PROFILING_ENABLE);
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE | CL_QUEUE_PROFILING_ENABLE, &err));
     std::string device_name = device.getInfo<CL_DEVICE_NAME>();
+    std::string binaryFile;
 
-    uint64_t bad_duration = run_opencl_cnn(devices, q, context, device_name,
+    binaryFile = argv[2];
+
+    uint64_t bad_duration = run_opencl_cnn(devices, q, context, device_name, binaryFile,
             false, size, weight, image, source_bad_hw_results, i_chan, o_chan);
 
-    uint64_t good_duration = run_opencl_cnn(devices, q, context, device_name, 
+    binaryFile = argv[1];
+
+    uint64_t good_duration = run_opencl_cnn(devices, q, context, device_name, binaryFile,
             true, size, weight, image, source_good_hw_results, i_chan, o_chan);
 //OPENCL HOST CODE AREA END
 

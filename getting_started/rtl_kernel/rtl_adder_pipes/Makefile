@@ -1,62 +1,129 @@
-################################################################################
-COMMON_REPO := ../../..
+.PHONY: help
 
-# Including Common Makefile
-include $(COMMON_REPO)/utility/boards.mk
-include $(COMMON_REPO)/libs/xcl2/xcl2.mk
-include $(COMMON_REPO)/libs/opencl/opencl.mk
+help::
+	$(ECHO) "Makefile Usage:"
+	$(ECHO) "  make all TARGET=<sw_emu/hw_emu/hw> DEVICE=<FPGA platform>"
+	$(ECHO) "      Command to generate the design for specified Target and Device."
+	$(ECHO) ""
+	$(ECHO) "  make clean "
+	$(ECHO) "      Command to remove the generated non-hardware files."
+	$(ECHO) ""
+	$(ECHO) "  make cleanall"
+	$(ECHO) "      Command to remove all the generated files."
+	$(ECHO) ""
+	$(ECHO) "  make check TARGET=<sw_emu/hw_emu/hw> DEVICE=<FPGA platform>"
+	$(ECHO) "      Command to run application in emulation."
+	$(ECHO) ""
+	$(ECHO) "  make build TARGET=<sw_emu/hw_emu/hw> DEVICE=<FPGA platform>"
+	$(ECHO) "      Command to build xclbin application."
+	$(ECHO) ""
+	$(ECHO) "  make run_nimbix DEVICE=<FPGA platform>"
+	$(ECHO) "      Command to run application on Nimbix Cloud."
+	$(ECHO) ""
+	$(ECHO) "  make aws_build DEVICE=<FPGA platform>"
+	$(ECHO) "      Command to build AWS xclbin application on AWS Cloud."
+	$(ECHO) ""
 
-# Host Application
-host_SRCS=./src/host.cpp $(xcl2_SRCS)
-host_HDRS=$(xcl2_HDRS)
-host_CXXFLAGS=-I./src/ $(opencl_CXXFLAGS) $(xcl2_CXXFLAGS)
-host_LDFLAGS=$(opencl_LDFLAGS)
+# Points to Utility Directory
+COMMON_REPO = ../../../
+ABS_COMMON_REPO = $(shell readlink -f $(COMMON_REPO))
 
-EXES=host
+TARGETS := hw
+TARGET := $(TARGETS)
+DEVICE := $(DEVICES)
+XCLBIN := ./xclbin
 
-#RTL Kernel Sources
-input_HDLSRCS=src/kernel_input_stage.xml\
-			  scripts/gen_input_xo.tcl\
-			  scripts/package_kernel_input_stage.tcl\
-			  src/input_stage/hdl/*.sv\
-			  src/input_stage/hdl/*.v
-input_TCL=scripts/gen_input_xo.tcl
+include ./utils.mk
 
-adder_HDLSRCS=src/kernel_adder_stage.xml\
-			  scripts/gen_adder_xo.tcl\
-			  scripts/package_kernel_adder_stage.tcl\
-			  src/adder_stage/hdl/*.sv\
-			  src/adder_stage/hdl/*.v
-adder_TCL=scripts/gen_adder_xo.tcl
+DSA := $(call device2sandsa, $(DEVICE))
+BUILD_DIR := ./_x.$(TARGET).$(DSA)
 
-output_HDLSRCS=src/kernel_output_stage.xml\
-			  scripts/gen_output_xo.tcl\
-			  scripts/package_kernel_output_stage.tcl\
-			  src/output_stage/hdl/*.sv\
-			  src/output_stage/hdl/*.v
-output_TCL=scripts/gen_output_xo.tcl
+BUILD_DIR_adder = $(BUILD_DIR)/adder
 
-RTLXOS=input adder output
+CXX := $(XILINX_SDX)/bin/xcpp
+XOCC := $(XILINX_SDX)/bin/xocc
 
-# Kernel
-adder_XOS=input adder output
-adder_NTARGETS=sw_emu
+#Include Libraries
+include $(ABS_COMMON_REPO)/libs/opencl/opencl.mk
+include $(ABS_COMMON_REPO)/libs/xcl2/xcl2.mk
+CXXFLAGS += $(xcl2_CXXFLAGS)
+LDFLAGS += $(xcl2_LDFLAGS)
+HOST_SRCS += $(xcl2_SRCS)
+include config.mk
 
-XCLBINS=adder
+CXXFLAGS += $(opencl_CXXFLAGS) -Wall -O0 -g -std=c++14
+LDFLAGS += $(opencl_LDFLAGS)
 
-EXTRA_CLEAN=tmp_kernel_pack* packaged_kernel*
+HOST_SRCS += src/host.cpp
 
-# check
-check_EXE=host
-check_XCLBINS=adder
-check_NTARGETS=$(adder_NTARGETS)
+# Host compiler global settings
+CXXFLAGS += -fmessage-length=0
+LDFLAGS += -lrt -lstdc++ 
 
-CHECKS=check
+# Kernel compiler global settings
+CLFLAGS += -t $(TARGET) --platform $(DEVICE) --save-temps 
 
-#Reporting warning if targeting for sw_emu
-ifneq (,$(findstring sw_emu,$(TARGETS)))
-$(warning WARNING:RTL Kernels do not support sw_emu TARGETS. Please use hw_emu for running RTL kernel Emulation)
+
+EXECUTABLE = host
+CMD_ARGS = $(XCLBIN)/adder.$(TARGET).$(DSA).xclbin
+
+EMCONFIG_DIR = $(XCLBIN)/$(DSA)
+
+BINARY_CONTAINERS += $(XCLBIN)/adder.$(TARGET).$(DSA).xclbin
+BINARY_CONTAINER_adder_OBJS += $(XCLBIN)/input.$(TARGET).$(DSA).xo
+BINARY_CONTAINER_adder_OBJS += $(XCLBIN)/adder.$(TARGET).$(DSA).xo
+BINARY_CONTAINER_adder_OBJS += $(XCLBIN)/output.$(TARGET).$(DSA).xo
+
+CP = cp -rf
+
+.PHONY: all clean cleanall docs emconfig
+all: check-devices $(EXECUTABLE) $(BINARY_CONTAINERS) emconfig
+
+.PHONY: exe
+exe: $(EXECUTABLE)
+
+.PHONY: build
+build: $(BINARY_CONTAINERS)
+
+# Building kernel
+$(XCLBIN)/adder.$(TARGET).$(DSA).xclbin: $(BINARY_CONTAINER_adder_OBJS)
+	mkdir -p $(XCLBIN)
+	$(XOCC) $(CLFLAGS) $(LDCLFLAGS) -lo $(XCLBIN)/adder.$(TARGET).$(DSA).xclbin $(XCLBIN)/input.$(TARGET).$(DSA).xo $(XCLBIN)/adder.$(TARGET).$(DSA).xo $(XCLBIN)/output.$(TARGET).$(DSA).xo
+
+# Building Host
+$(EXECUTABLE): check-xrt $(HOST_SRCS) $(HOST_HDRS)
+	$(CXX) $(CXXFLAGS) $(HOST_SRCS) $(HOST_HDRS) -o '$@' $(LDFLAGS)
+
+emconfig:$(EMCONFIG_DIR)/emconfig.json
+$(EMCONFIG_DIR)/emconfig.json:
+	emconfigutil --platform $(DEVICE) --od $(EMCONFIG_DIR)
+
+check: all
+ifeq ($(TARGET),$(filter $(TARGET),sw_emu hw_emu))
+	$(CP) $(EMCONFIG_DIR)/emconfig.json .
+	XCL_EMULATION_MODE=$(TARGET) ./$(EXECUTABLE) $(XCLBIN)/adder.$(TARGET).$(DSA).xclbin
+else
+	 ./$(EXECUTABLE) $(XCLBIN)/adder.$(TARGET).$(DSA).xclbin
+endif
+ifneq ($(TARGET),$(findstring $(TARGET), hw hw_emu))
+$(warning WARNING:Application supports only hw hw_emu TARGET. Please use the target for running the application)
 endif
 
-include $(COMMON_REPO)/utility/rules.mk
+	sdx_analyze profile -i profile_summary.csv -f html
 
+run_nimbix: all
+	$(COMMON_REPO)/utility/nimbix/run_nimbix.py $(EXECUTABLE) $(CMD_ARGS) $(DSA)
+
+aws_build: check-aws_repo $(BINARY_CONTAINERS)
+	$(COMMON_REPO)/utility/aws/run_aws.py $(BINARY_CONTAINERS)
+
+# Cleaning stuff
+clean:
+	-$(RMDIR) $(EXECUTABLE) $(XCLBIN)/{*sw_emu*,*hw_emu*} 
+	-$(RMDIR) profile_* TempConfig system_estimate.xtxt *.rpt *.csv 
+	-$(RMDIR) src/*.ll _xocc_* .Xil emconfig.json dltmp* xmltmp* *.log *.jou *.wcfg *.wdb
+
+cleanall: clean
+	-$(RMDIR) $(XCLBIN)
+	-$(RMDIR) _x.*
+	-$(RMDIR) ./tmp_kernel_pack* ./packaged_kernel* 

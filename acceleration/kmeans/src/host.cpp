@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
              
     float **features;
     float **cluster_centres=NULL;
-    int     i, j, index;
+    int     i, j, index, status;
     int     nloops = 1;/* default value */
             
     int     isRMSE = 0;
@@ -100,7 +100,8 @@ int main(int argc, char **argv) {
     CmdLineParser parser;
 
                    //"<Full Arg>",  "<Short Arg>", "<Description>",                "<Default>");
-    parser.addSwitch("--input_file",    "-i",    "input test data flie",               "");
+    parser.addSwitch("--xclbin_file",   "-x",    "input binary file string",           "");
+    parser.addSwitch("--input_file",    "-i",    "input test data file",               "");
     parser.addSwitch("--compare_file",  "-c",    "Compare File to compare result",      "");
     parser.addSwitch("--max_nclusters", "-m",    "maximum number of clusters allowed", "5");
     parser.addSwitch("--min_nclusters", "-n",    "minimum number of clusters allowed", "5");
@@ -110,6 +111,7 @@ int main(int argc, char **argv) {
     parser.parse(argc, argv);
 
     //read settings
+    std::string binaryFile      = parser.value("xclbin_file");
     std::string filename        = parser.value("input_file");   
     std::string goldenfile      = parser.value("compare_file");
     
@@ -123,7 +125,10 @@ int main(int argc, char **argv) {
         parser.printHelp();
         exit(EXIT_FAILURE);
     }
-    fpga_kmeans_setup(global_size);
+
+    FPGA_KMEANS* fpga = new FPGA_KMEANS();
+
+    fpga->fpga_kmeans_setup(global_size);
 
     /* ============== I/O begin ==============*/
     /* get nfeatures and npoints */
@@ -208,7 +213,9 @@ int main(int argc, char **argv) {
     
     //FPGA Based cluster
     cluster_centres = NULL;
-    index = cluster(npoints,            /* number of data points */
+    status = cluster(
+                    fpga,
+                    npoints,            /* number of data points */
                     nfeatures,          /* number of features for each point */
                     features,           /* array: [npoints][nfeatures] */
                     min_nclusters,      /* range of min to max number of clusters */
@@ -219,8 +226,9 @@ int main(int argc, char **argv) {
                     &rmse,              /* Root Mean Squared Error */
                     isRMSE,             /* calculate RMSE */
                     nloops,             /* number of iteration for each number of clusters */
-                    goldenfile.c_str());
-    
+                    binaryFile,         /* Binary file string */
+                    index,
+                    goldenfile.c_str());        
     
     //cluster_timing = omp_get_wtime() - cluster_timing;
     
@@ -266,10 +274,11 @@ int main(int argc, char **argv) {
         }
     }
     
-    
     /* free up memory */
+    delete fpga;
     free(features[0]);
     free(features);    
-    return(0);
+ 
+    return status;
 }
 

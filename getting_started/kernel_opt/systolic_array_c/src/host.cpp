@@ -66,6 +66,13 @@ void m_softwareGold(
 
 int main(int argc, char** argv)
 {
+    if (argc != 2) {
+        std::cout << "Usage: " << argv[0] << " <XCLBIN File>" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    std::string binaryFile = argv[1];
+
     //Allocate Memory in Host Memory
     if (DATA_SIZE > MAX_SIZE) {
         std::cout << "Size is bigger than internal buffer size, please use a size smaller than " << MAX_SIZE << "!" << std::endl;
@@ -74,6 +81,8 @@ int main(int argc, char** argv)
     
     size_t matrix_size =  DATA_SIZE * DATA_SIZE;
     size_t matrix_size_bytes = sizeof(int) * matrix_size;
+    cl_int err;
+    unsigned fileBufSize;
 
     std::vector<int,aligned_allocator<int>> source_in1        (matrix_size);
     std::vector<int,aligned_allocator<int>> source_in2        (matrix_size);
@@ -92,45 +101,44 @@ int main(int argc, char** argv)
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
 
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE);
-    std::string device_name = device.getInfo<CL_DEVICE_NAME>(); 
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE, &err));
+    OCL_CHECK(err, std::string device_name = device.getInfo<CL_DEVICE_NAME>(&err));
 
-    std::string binaryFile = xcl::find_binary_file(device_name,"mmult");
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
     devices.resize(1);
-    cl::Program program(context, devices, bins);
-    cl::Kernel kernel(program,"mmult");
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    OCL_CHECK(err, cl::Kernel krnl_systolic_array(program,"mmult", &err));
 
     //Allocate Buffer in Global Memory
-    cl::Buffer buffer_in1   (context,CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, 
-            matrix_size_bytes,source_in1.data());
-    cl::Buffer buffer_in2   (context,CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY, 
-            matrix_size_bytes,source_in2.data());
-    cl::Buffer buffer_output(context,CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, 
-            matrix_size_bytes, source_hw_results.data());
-    std::vector<cl::Memory> inBufVec, outBufVec;
-    inBufVec.push_back(buffer_in1);
-    inBufVec.push_back(buffer_in2);
-    outBufVec.push_back(buffer_output);
-
-    //Copy input data to device global memory
-    q.enqueueMigrateMemObjects(inBufVec,0/* 0 means from host*/);
+    OCL_CHECK(err, cl::Buffer buffer_in1   (context,CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
+            matrix_size_bytes,source_in1.data(), &err));
+    OCL_CHECK(err, cl::Buffer buffer_in2   (context,CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
+            matrix_size_bytes,source_in2.data(), &err));
+    OCL_CHECK(err, cl::Buffer buffer_output(context,CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
+            matrix_size_bytes, source_hw_results.data(), &err));
     
     int a_row = DATA_SIZE;
     int a_col = DATA_SIZE;
     int b_col = DATA_SIZE;
 
-    auto krnl_systolic_array= cl::KernelFunctor<cl::Buffer&, cl::Buffer&,
-         cl::Buffer&, int, int, int>(kernel);
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(0, buffer_in1));
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(1, buffer_in2));
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(2, buffer_output));
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(3, a_row));
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(4, a_col));
+    OCL_CHECK(err, err = krnl_systolic_array.setArg(5, b_col));
+
+    //Copy input data to device global memory
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_in1, buffer_in2},0/* 0 means from host*/));
 
     //Launch the Kernel
-    krnl_systolic_array(cl::EnqueueArgs(q,cl::NDRange(1,1,1), cl::NDRange(1,1,1)), 
-            buffer_in1, buffer_in2, buffer_output, a_row, a_col,b_col);
+    OCL_CHECK(err, err = q.enqueueTask(krnl_systolic_array));
     q.finish();
 
     //Copy Result from Device Global Memory to Host Local Memory
-    q.enqueueMigrateMemObjects(outBufVec,CL_MIGRATE_MEM_OBJECT_HOST);
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_output},CL_MIGRATE_MEM_OBJECT_HOST));
     q.finish();
 //OPENCL HOST CODE AREA END
  
@@ -148,6 +156,8 @@ int main(int argc, char** argv)
             break;
         }
     }
+
+    delete[] fileBuf;
 
     std::cout << "TEST " << (match ? "FAILED" : "PASSED") << std::endl; 
     return (match ? EXIT_FAILURE :  EXIT_SUCCESS);

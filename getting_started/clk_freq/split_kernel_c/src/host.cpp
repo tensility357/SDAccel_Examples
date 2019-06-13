@@ -158,6 +158,7 @@ void run_opencl_sketch
    cl::CommandQueue &q,
    cl::Context &context,
    std::string &device_name,
+   std::string &binaryFile,
    bool good,
    std::vector<int, aligned_allocator<int>> &hw_inImage,
    std::vector<int, aligned_allocator<int>> &hw_outImage,
@@ -166,64 +167,66 @@ void run_opencl_sketch
    int height
  )
  {
-    std::string binaryFile;
+    cl_int err;
+    unsigned fileBufSize;
     size_t image_size_bytes = sizeof(int) * size;
 
-    if(good)
-       binaryFile = xcl::find_binary_file(device_name,"sketch_GOOD");
-    else
-       binaryFile = xcl::find_binary_file(device_name,"sketch_BAD");
-
-
-    cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+    char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+    cl::Program::Binaries bins{{fileBuf, fileBufSize}};
     devices.resize(1);
-    cl::Program program(context, devices, bins);
-    cl::Kernel krnl_process_image(program,"process_image");
+    OCL_CHECK(err, cl::Program program(context, devices, bins, NULL, &err));
+    cl::Kernel krnl_process_image;
+    if (good) {
+    OCL_CHECK(err, krnl_process_image = cl::Kernel(program,"sketch_GOOD", &err));
+    }
+    else {
+    OCL_CHECK(err, krnl_process_image = cl::Kernel(program, "sketch_BAD", &err));
+    }
 
     //Allocate Buffer in Global Memory
-    std::vector<cl::Memory> inBufVec, outBufVec;
-    cl::Buffer buffer_input (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
-                            image_size_bytes,hw_inImage.data());
+    OCL_CHECK(err, cl::Buffer buffer_input (context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_ONLY,
+                            image_size_bytes,hw_inImage.data(), &err));
  
-    cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
-            image_size_bytes,hw_outImage.data());
-    inBufVec.push_back(buffer_input);
-    outBufVec.push_back(buffer_output);
-
+    OCL_CHECK(err, cl::Buffer buffer_output(context, CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY,
+            image_size_bytes,hw_outImage.data(), &err));
+    
     std::cout << "Writing input image to buffer...\n";
-
-    //Copy input data to device global memory
-    q.enqueueMigrateMemObjects(inBufVec,0/* 0 means from host*/);
     
     int narg = 0;
 
     //Set the Kernel Arguments
-    krnl_process_image.setArg(narg++, buffer_input);
-    krnl_process_image.setArg(narg++, buffer_output);
-    krnl_process_image.setArg(narg++, width);
-    krnl_process_image.setArg(narg++, height);
+    OCL_CHECK(err, err = krnl_process_image.setArg(narg++, buffer_input));
+    OCL_CHECK(err, err = krnl_process_image.setArg(narg++, buffer_output));
+    OCL_CHECK(err, err = krnl_process_image.setArg(narg++, width));
+    OCL_CHECK(err, err = krnl_process_image.setArg(narg++, height));
     
+    //Copy input data to device global memory
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_input},0/* 0 means from host*/));
+
     std::cout << "Launching Kernels...." << std::endl;
 
     //Launch the Kernel
-    q.enqueueTask(krnl_process_image);
+    OCL_CHECK(err, err = q.enqueueTask(krnl_process_image));
     std::cout << "Kernel Execution Finished...." << std::endl;
     
     //Copy Result from Device Global Memory to Host Local Memory
-    q.enqueueMigrateMemObjects(outBufVec,CL_MIGRATE_MEM_OBJECT_HOST);
-    q.finish();
+    OCL_CHECK(err, err = q.enqueueMigrateMemObjects({buffer_output},CL_MIGRATE_MEM_OBJECT_HOST));
+    OCL_CHECK(err, err = q.finish());
+    delete[] fileBuf;
 
   }
 
 
 int main(int argc, char** argv)
 {
-    if (argc != 2)
+    if (argc != 4)
     {
-        std::cout << "Usage: " << argv[0] << " <input bitmap>" << std::endl;
+        std::cout << "Usage: " << argv[0] << " <GOOD XCLBIN File>" 
+                    << " <BAD XCLBIN File>" << " <input bitmap>" << std::endl;
         return EXIT_FAILURE ;
     }
-    const char* bitmapFilename = argv[1];
+
+    const char* bitmapFilename = argv[3];
 
     //Read the bitmap file into memory and allocate memory 
     std::cout << "Reading input image...\n";
@@ -257,17 +260,21 @@ int main(int argc, char** argv)
     int size = image.numPixels();  
 
 //OPENCL HOST CODE AREA START
+    cl_int err;
 
     //Create Program and Kernels. 
     std::vector<cl::Device> devices = xcl::get_xil_devices();
     cl::Device device = devices[0];
 
-    cl::Context context(device);
-    cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE);
+    OCL_CHECK(err, cl::Context context(device, NULL, NULL, NULL, &err));
+    OCL_CHECK(err, cl::CommandQueue q(context, device, CL_QUEUE_PROFILING_ENABLE, &err));
     std::string device_name = device.getInfo<CL_DEVICE_NAME>(); 
+    std::string binaryFile;
 
-    run_opencl_sketch(devices,q,context,device_name,true,hw_inImage,hw_outImage,size,width,height);
-    run_opencl_sketch(devices,q,context,device_name,false,hw_inImage,hw_outImage,size,width,height);
+    binaryFile = argv[1];
+    run_opencl_sketch(devices,q,context,device_name,binaryFile,true,hw_inImage,hw_outImage,size,width,height);
+    binaryFile = argv[2];
+    run_opencl_sketch(devices,q,context,device_name,binaryFile,false,hw_inImage,hw_outImage,size,width,height);
 
 //OPENCL HOST CODE AREA END
 

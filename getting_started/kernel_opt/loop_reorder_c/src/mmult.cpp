@@ -49,7 +49,7 @@ Kernel Description :
     
         int *in1   (input)     --> Input  Matrix 1
         int *in2   (input)     --> Input  Matrix 2
-        int *out   (output)    --> Output Matrix
+        int *out_r   (output)    --> Output Matrix
         int  size  (input)     --> Size of one dimension of the matrices
 
     Kernel Configuration :
@@ -61,25 +61,28 @@ Kernel Description :
 #include <stdio.h>
 
 //Maximum Array Size
-#define MAX_SIZE 64
+#define MAX_SIZE 32
 
+//TRIPCOUNT indentifier
+const unsigned int c_size = MAX_SIZE;
+ 
 // Computes matrix multiply
 // C = AxB, where A, B and C are square matrices of dimension (sizexsize)
 extern "C"{
     void mmult(
-				    const int *in1,     // Read-Only Matrix 1
-				    const int *in2,     // Read-Only Matrix 2
-				    int *out,           // Output Result
-				    int size            // Size of one dimension of the matrices
-				    )
+                    const int *in1,     // Read-Only Matrix 1
+                    const int *in2,     // Read-Only Matrix 2
+                    int *out_r,           // Output Result
+                    int size            // Size of one dimension of the matrices
+                    )
     {
     #pragma HLS INTERFACE m_axi port=in1 offset=slave bundle=gmem
     #pragma HLS INTERFACE m_axi port=in2 offset=slave bundle=gmem
-    #pragma HLS INTERFACE m_axi port=out offset=slave bundle=gmem
+    #pragma HLS INTERFACE m_axi port=out_r offset=slave bundle=gmem
 
     #pragma HLS INTERFACE s_axilite port=in1 bundle=control
     #pragma HLS INTERFACE s_axilite port=in2 bundle=control
-    #pragma HLS INTERFACE s_axilite port=out bundle=control
+    #pragma HLS INTERFACE s_axilite port=out_r bundle=control
     #pragma HLS INTERFACE s_axilite port=size bundle=control
     #pragma HLS INTERFACE s_axilite port=return bundle=control
        
@@ -97,7 +100,7 @@ extern "C"{
         // Burst read for matrix A
         readA: for(int itr = 0 , i = 0 , j =0; itr < size * size; itr++, j++){
         #pragma HLS PIPELINE II=1
-        #pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+        #pragma HLS LOOP_TRIPCOUNT min=c_size*c_size max=c_size*c_size
             if(j == size) { j = 0 ; i++; }
             A[i][j] = in1[itr];
         }
@@ -105,7 +108,7 @@ extern "C"{
         // Burst read for matrix B
         readB: for(int itr  =0, i = 0, j = 0; itr < size * size; itr++, j++) {
         #pragma HLS PIPELINE II=1
-        #pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+        #pragma HLS LOOP_TRIPCOUNT min=c_size*c_size max=c_size*c_size
             if(j == size) { j = 0 ; i++; }
             B[i][j] = in2[itr];
         }
@@ -142,9 +145,9 @@ extern "C"{
         // Calculate matrix multiplication using local data buffer based on input size
         // and write results into local buffer for C
         lreorder1: for (int i = 0; i < size; i++) {
-        #pragma HLS LOOP_TRIPCOUNT min=64 max=64
+        #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
             lreorder2: for (int k = 0; k < size; k++) {
-            #pragma HLS LOOP_TRIPCOUNT min=64 max=64
+            #pragma HLS LOOP_TRIPCOUNT min=c_size max=c_size
             #pragma HLS PIPELINE II=1
                 lreorder3: for (int j = 0; j < MAX_SIZE; j++) {
                     int result = (k == 0) ? 0 : temp_sum[j];
@@ -158,10 +161,10 @@ extern "C"{
         // Burst write from output matrices to global memory
         // Burst write from matrix C
         writeC: for(int itr = 0 , i = 0, j = 0; itr < size * size; itr++, j++) {
-            #pragma HLS PIPELINE II=1
-            #pragma HLS LOOP_TRIPCOUNT min=4096 max=4096
+        #pragma HLS PIPELINE II=1
+        #pragma HLS LOOP_TRIPCOUNT min=c_size*c_size max=c_size*c_size
             if(j == size) { j = 0 ; i++; }
-            out[itr] = C[i][j];
+            out_r[itr] = C[i][j];
         }
     }
 }

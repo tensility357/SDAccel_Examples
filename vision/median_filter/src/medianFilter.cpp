@@ -56,6 +56,8 @@ int main(int argc, char* argv[])
     printf("Usage: %s <xclbin> <input bitmap> <golden bitmap(optional)>\n", argv[0]) ;
     return -1 ;
   }
+
+  std::string binaryFile = argv[1];
   
   // Read the input bit map file into memory
   std::cout << "Reading input image...\n";
@@ -87,6 +89,7 @@ int main(int argc, char* argv[])
   // Set up OpenCL hardware and software constructs
   std::cout << "Setting up OpenCL hardware and software...\n";
   cl_int err = 0 ;
+  unsigned fileBufSize;
 
   // The get_xil_devices will return vector of Xilinx Devices
   std::vector<cl::Device> devices = xcl::get_xil_devices();
@@ -98,10 +101,10 @@ int main(int argc, char* argv[])
   std::string device_name = device.getInfo<CL_DEVICE_NAME>();
   std::cout << "Found Device=" << device_name.c_str() << std::endl;
 
-  // import_binary() command will find the OpenCL binary file created using the 
-  // xocc compiler load into OpenCL Binary and return as Binaries
-  std::string binaryFile = xcl::find_binary_file(device_name,"krnl_median");
-  cl::Program::Binaries bins = xcl::import_binary_file(binaryFile);
+  // read_binary_file() command will find the OpenCL binary file created using the 
+  // xocc compiler load into OpenCL Binary and return pointer to file buffer.
+  char* fileBuf = xcl::read_binary_file(binaryFile, fileBufSize);
+  cl::Program::Binaries bins{{fileBuf, fileBufSize}};
   devices.resize(1);
   cl::Program program(context, devices, bins);
 
@@ -112,13 +115,6 @@ int main(int argc, char* argv[])
 
   cl::Event kernel_Event, read_Event, write_Event;
 
-  // These commands will load the input_image and output_image vectors from the host
-  // application into the buffer_input and buffer_output cl::Buffer objects.
-  std::cout << "Writing input image to buffer...\n";
-  err = q.enqueueMigrateMemObjects({buffer_input},0/* 0 means from host*/, NULL, &write_Event);
-
-  checkErrorStatus(err, "Unable to enqueue write buffer") ;
-
   // This call will extract a kernel out of the program we loaded in the previous line
   cl::Kernel krnl_medianFilter(program, "median");
 
@@ -128,6 +124,13 @@ int main(int argc, char* argv[])
   krnl_medianFilter.setArg(1, buffer_output);
   krnl_medianFilter.setArg(2, width);
   krnl_medianFilter.setArg(3, height);
+
+  // These commands will load the input_image and output_image vectors from the host
+  // application into the buffer_input and buffer_output cl::Buffer objects.
+  std::cout << "Writing input image to buffer...\n";
+  err = q.enqueueMigrateMemObjects({buffer_input},0/* 0 means from host*/, NULL, &write_Event);
+
+  checkErrorStatus(err, "Unable to enqueue write buffer") ;
 
   std::vector<cl::Event> eventList;
   eventList.push_back(write_Event);
@@ -171,6 +174,8 @@ int main(int argc, char* argv[])
           }
       }
   }
+
+  delete[] fileBuf;
 
   // Write the final image to disk
   printf("Writing RAW Image \n");
